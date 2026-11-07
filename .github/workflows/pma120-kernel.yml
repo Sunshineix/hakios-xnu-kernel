@@ -39,6 +39,7 @@ jobs:
       - name: Configure pma120 and build the kernel + loader
         run: |
           set -o pipefail
+          mkdir -p logs
           make pma120_defconfig
           if ! make kernel BUILD_DSYM=0 2>&1 | tee logs/pma120-kernel.log; then
             echo '=== xnu-deps/exporthdrs.log ==='
