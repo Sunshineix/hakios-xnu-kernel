@@ -1,0 +1,19 @@
+soc_ipa_base=0x3e40000
+soc_gsi_base=0x3e04000
+soc_ipcc=0x1106000
+soc_rsc=0x18920000
+soc_apps_smmu=0x15000000
+soc_imem=0x14600000
+soc_ipa_stream=0x4a0
+soc_ipa_stream_uc=0x4a2
+soc_pas_ipa=0xf
+soc_ipa_fw=ipa_fws
+
+# —— SM8850 (canoe) 命名差异下重新定位（2026-11-07，X9U-iOS移植/scripts/dtb_find*.py）——
+# 上游 tools/soc-args.py 按老平台精确叶名/compatible 查找，SM8850 以下节点形式不同：
+soc_aoss=0xc300000          # /soc/power-controller@c300000（compatible 为裸 qcom,aoss-qmp，无 SoC 前缀）
+soc_cmd_db=0x81c60000       # /reserved-memory/aop_cmd_db_region@81c60000（compatible qcom,cmd-db）
+soc_mpss_mem=0x8aa00000     # /reserved-memory/mpss_region@8aa00000
+modem_ipa_fw_at=0x99590000  # /reserved-memory/ipa_gsi_region@99590000（ipa_fw_region=0x99580000 为另一候选，待核对驱动语义）
+soc_smem=0x81d00000         # /reserved-memory/smem_region@81d00000（节点自带 reg，无 memory-region 间接层）
+# soc_pas_mpss 仍缺：/soc/remoteproc-mss@04080000 无 qcom,pas-id 属性，需从 SM8850 Linux dtsi/内核源码确认 PAS id
