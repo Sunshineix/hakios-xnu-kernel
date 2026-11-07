@@ -18,6 +18,8 @@ ap.add_argument('--usb', action='store_true', help='make the loader stay residen
 ap.add_argument('--rdres', default='', help='hex size of a root image already placed at the resident address (QEMU)')
 # (a resident image the loader places itself: give it as an item, resident=FILE -- a boot with no host, from the phone's boot partition)
 ap.add_argument('--checkpoint', default='', help='kernel checkpoint to stop at; 999 = loader self test')
+ap.add_argument('--platform', default='',
+                help='platform table to select (e.g. "pma120")')
 ap.add_argument('--kernel-version', default='',
                 help='the kernel.ver the loader prints under its banner (default: tools/kernel-version.py)')
 ap.add_argument('--no-version', action='store_true', help='no kernel.ver entry')
@@ -42,6 +44,8 @@ if args.usb:
     add('usb', b'1\0')
 if args.checkpoint:
     add('checkpoint', args.checkpoint.encode() + b'\0')
+if args.platform:
+    add('platform', args.platform.encode() + b'\0')
 # The version of the kernel in this payload, which the loader prints as "kernel.ver=" under its banner and
 # hands to the kernel as the boot-arg hakios_kver. A loader that does not know the entry skips it.
 if not args.no_version:
