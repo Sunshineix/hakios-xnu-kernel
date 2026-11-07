@@ -1,0 +1,61 @@
+# X9U-iOS绉绘椤圭洰锛歨akios 鐨?pma120 鎵嬫満鍐呮牳 + 寮曞鍣ㄦ瀯寤猴紙鏃?Apple 浜岃繘鍒讹級
+# 澶嶇敤 qemu-open 鐨勫伐鍏烽摼閰嶆柟锛涗骇鐗╋細hakios-kernel锛坧ma120 閰嶇疆锛? loader.efi锛堝崰浣嶈韩浠斤紝寮€鏀惧唴鏍哥敤锛夈€?# 涓庣湡鏈?UEFI 鍥轰欢锛坧ma120-uefi-build 绉佹湁浠撳簱浜х墿锛夐厤鍚堝仛 RAM 棣栧惎銆?name: pma120-kernel (XNU kernel for the phone)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+concurrency:
+  group: pma120-kernel-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  kernel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang lld flex bison m4 autoconf automake libtool \
+            perl python3 python3-pip git curl tar xz-utils unzip zip fakeroot uuid-dev
+
+      - name: Install theos with its Linux toolchain and the iPhoneOS 16.5 SDK
+        run: |
+          export THEOS="$HOME/theos"
+          bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
+          mkdir -p "$THEOS/sdks"
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/theos/sdks.git "$THEOS/sdks-git"
+          git -C "$THEOS/sdks-git" sparse-checkout set iPhoneOS16.5.sdk
+          ln -sfn ../sdks-git/iPhoneOS16.5.sdk "$THEOS/sdks/iPhoneOS16.5.sdk"
+
+      - name: Doctor (what this machine has and lacks)
+        run: make doctor || true
+
+      - name: Configure pma120 and build the kernel + loader
+        run: |
+          set -o pipefail
+          make pma120_defconfig
+          if ! make kernel BUILD_DSYM=0 2>&1 | tee logs/pma120-kernel.log; then
+            echo '=== xnu-deps/exporthdrs.log ==='
+            cat xnu-deps/exporthdrs.log 2>/dev/null || true
+            exit 1
+          fi
+          PLACEHOLDER=1 xnuloader/mkidentity.sh
+          xnuloader/build.sh
+          ls -la hakios-kernel xnuloader/loader.efi
+
+      - name: Upload kernel and loader
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pma120-kernel
+          path: |
+            hakios-kernel
+            xnuloader/loader.efi
+            logs/pma120-kernel.log
+          retention-days: 7
