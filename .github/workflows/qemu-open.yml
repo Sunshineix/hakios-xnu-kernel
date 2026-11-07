@@ -48,7 +48,13 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p logs
-          make qemu-open SECS=120 2>&1 | tee logs/qemu-open.log
+          if ! make qemu-open SECS=120 2>&1 | tee logs/qemu-open.log; then
+            echo '=== xnu-deps/exporthdrs.log ==='
+            cat xnu-deps/exporthdrs.log 2>/dev/null || true
+            echo '=== xnu-deps/setup logs ==='
+            ls xnu-deps/*.log 2>/dev/null | while read -r f; do echo "--- $f ---"; tail -30 "$f"; done || true
+            exit 1
+          fi
 
       - name: Check the serial log for the boot markers
         run: |
