@@ -1,0 +1,61 @@
+# X9U-iOS绉绘椤圭洰 M1a锛歨akios 寮€婧愬唴鏍稿湪 QEMU 涓惎鍔ㄩ獙璇?# 鏃犱换浣?Apple 绉佹湁浜岃繘鍒讹細XNU 鍐呮牳锛圓pple 寮€婧愭爲 + hakios 琛ヤ竵锛? 鍗犱綅寮曞鍣?+ hello 鍐呭瓨鐩?#
+# 鐢ㄦ硶锛?#   1. 鍦ㄤ綘鐨?GitHub 璐﹀彿涓?fork 浠撳簱 oosexgang/hakios-xnu-kernel
+#   2. 鍦?fork 鐨勭綉椤典笂锛欰dd file 鈫?Create new file
+#      鏂囦欢鍚嶅～ .github/workflows/qemu-open.yml锛屾妸鏈枃浠跺唴瀹圭矘璐磋繘鍘伙紝Commit
+#   3. Actions 鏍囩椤?鈫?宸︿晶 "qemu-open (XNU boots in QEMU)" 鈫?Run workflow
+#   4. 棣栨鏋勫缓绾?30-60 鍒嗛挓锛堜笅杞?Apple xnu 婧愮爜鏍戝苟缂栬瘧鍐呮牳锛?#   5. 鎴愬姛鏍囧織锛堟瀯寤烘棩蹇?/ 涓婁紶鐨?qemu-open-log 宸ヤ欢閲岋級锛?#        == XNULOADER v3 ==
+#        hakios-kernel: version ... / hakios-kernel: N drivers built in (...)
+#        hello 鐢ㄦ埛鎬佽緭鍑?name: qemu-open (XNU boots in QEMU)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+concurrency:
+  group: qemu-open-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  qemu-open:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang lld flex bison m4 autoconf automake libtool \
+            perl python3 python3-pip git curl tar xz-utils unzip zip fakeroot \
+            qemu-system-aarch64 qemu-efi-aarch64
+
+      - name: Install theos with its Linux toolchain and the iPhoneOS 16.5 SDK
+        run: |
+          git clone --depth 1 --recursive https://github.com/theos/theos.git "$HOME/theos"
+          mkdir -p "$HOME/theos/sdks"
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/theos/sdks.git "$HOME/theos/sdks-git"
+          git -C "$HOME/theos/sdks-git" sparse-checkout set iPhoneOS16.5.sdk
+          ln -s ../sdks-git/iPhoneOS16.5.sdk "$HOME/theos/sdks/iPhoneOS16.5.sdk"
+
+      - name: Doctor (what this machine has and lacks)
+        run: make doctor || true
+
+      - name: Build and boot the open kernel in QEMU
+        run: |
+          mkdir -p logs
+          make qemu-open SECS=120 | tee logs/qemu-open.log
+
+      - name: Check the serial log for the boot markers
+        run: |
+          grep -E '== XNULOADER v3 ==' logs/qemu-open.log
+          grep -E 'hakios-kernel: .* drivers built in' logs/qemu-open.log
+
+      - name: Upload the serial log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-open-log
+          path: logs/qemu-open.log
+          retention-days: 7
