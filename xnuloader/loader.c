@@ -2994,7 +2994,7 @@ run_kernel(int have_checkpoint, uint64_t checkpoint)
 	uint64_t ba_pa = dt_pa + dt_max;
 	uint64_t top = ba_pa + PAGE_SIZE_MAX;
 
-	if (win_size < top - phys_base + 0x4000000ULL) {
+	if (win_size < top - phys_base + 0x2000000ULL) {   /* pma120: 64 MiB slack did not fit the 128 MiB free block; 32 MiB does */
 		print("not enough contiguous RAM\n");
 		return 0;
 	}
