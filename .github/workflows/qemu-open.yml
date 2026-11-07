@@ -48,7 +48,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p logs
-          if ! make qemu-open SECS=120 2>&1 | tee logs/qemu-open.log; then
+          if ! make qemu-open SECS=120 BUILD_DSYM=0 2>&1 | tee logs/qemu-open.log; then
             echo '=== xnu-deps/exporthdrs.log ==='
             cat xnu-deps/exporthdrs.log 2>/dev/null || true
             echo '=== xnu-deps/setup logs ==='
