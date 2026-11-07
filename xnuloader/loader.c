@@ -258,6 +258,22 @@ clean_dcache(uint64_t start, uint64_t end)
 	__asm__ volatile ("dsb sy");
 }
 
+/* Diagnostic color markers on the splash framebuffer (the panel's scanout):
+ * the final color on the phone's screen shows how far the loader got.
+ *   WHITE: payload parsed   PURPLE: USB started   GREEN: entering kernel   RED: rebooting */
+#define MARK_FB_BASE 0xFC800000ULL
+#define MARK_W       1440ULL
+#define MARK_H       3168ULL
+static void
+mark(uint32_t color)
+{
+	volatile uint32_t *fb = (volatile uint32_t *)MARK_FB_BASE;
+	for (uint64_t i = 0; i < MARK_W * MARK_H; i++) {
+		fb[i] = color;
+	}
+	flush_dcache(MARK_FB_BASE, MARK_FB_BASE + MARK_W * MARK_H * 4);
+}
+
 /* ------------------------------------------------------------------------ */
 /* Log persistence: raw write to a GPT partition (phone only)               */
 
@@ -588,11 +604,22 @@ static const struct platform platform_redwood = {
 	.small_cores = 0x0f,
 };
 
+static const struct platform platform_pma120 = {
+	/* OPPO Find X9 Ultra, Snapdragon 8 Elite Gen 5 (SM8850, "canoe").
+	   GIC values from KaanapaliPkg (the vendor UEFI platform package): GICD 0x17000000,
+	   GICR 0x17080000. 8 cores: 0-5 Oryon M (small), 6-7 Oryon L (big), bootcpu=7. */
+	.name = "pma120", .io_base = 0x00400000, .io_size = 0x3FC00000,
+	.gic_dist = 0x17000000, .gic_redist = 0x17080000, .uart = 0, .log_other_cpu = 1,
+	.cores = 8, .core_shift = 8,
+	.small_cores = 0x3f,
+};
+
 /* ------------------------------------------------------------------------ */
 
 static void
 reboot(void)
 {
+	mark(0x00FF0000u);                               /* red: rebooting */
 	hc_take_back("before the reset");
 	flush_log();
 	ST->rt->reset_system(0 /* EfiResetCold */, 0, 0, NULL);
@@ -2566,6 +2593,7 @@ struct payload_info {
 	const uint8_t *resident;        /* ... or one the payload carries, which the loader puts there itself */
 	uint32_t resident_size;
 	const char *kernel_version;     /* kernel.ver: the version of the kernel in this payload (tools/kernel-version.py) */
+	const char *platform;           /* platform entry: select the SoC table (e.g. "pma120") */
 	int usb_mode;
 };
 
@@ -2642,6 +2670,8 @@ parse_payload(struct payload_info *pi, int verbose)
 			pi->resident_rd = parse_number(text, 16); /* e.g. loaded there by QEMU; see RESIDENT_RD_OFFSET */
 		} else if (str_eq(e->name, "kernel.ver")) {
 			pi->kernel_version = text;                /* printed under the banner; the kernel gets it as hakios_kver */
+		} else if (str_eq(e->name, "platform")) {
+			pi->platform = text;                      /* select the SoC table, e.g. "pma120" */
 		} else if (str_eq(e->name, "checkpoint")) {
 			pi->checkpoint = parse_number(text, 10);  /* where the kernel should stop and come back */
 		} else if (str_eq(e->name, "usb")) {
@@ -4335,6 +4365,13 @@ efi_main(efi_handle image, efi_system_table *st)
 	    READ_SYSREG(ID_AA64MMFR0_EL1), READ_SYSREG(CNTFRQ_EL0), (uint64_t)(uintptr_t)&__ImageBase);
 
 	PLAT = &platform_qemu_virt;
+	/* A payload that names its platform selects the SoC table before anything uses it. */
+	{
+		struct payload_info pi_early;
+		if (parse_payload(&pi_early, 0) && pi_early.platform != NULL && str_eq(pi_early.platform, "pma120")) {
+			PLAT = &platform_pma120;
+		}
+	}
 	if (EFI_ERROR(BS->locate_protocol(&gop_guid, NULL, (void **)&GOP)) || GOP->mode == NULL ||
 	    GOP->mode->info == NULL || GOP->mode->fb_base == 0) {
 		GOP = NULL;                     /* no display (QEMU without -device ramfb) */
@@ -4356,13 +4393,18 @@ efi_main(efi_handle image, efi_system_table *st)
 	wdt_arm();
 
 	int have_payload = parse_payload(&pi, 0);
+	if (have_payload) {
+		mark(0x00FFFFFFu);                       /* white: payload parsed */
+	}
 	if (have_payload && pi.usb_mode && usb_start()) {
+		mark(0x00FF00FFu);                       /* purple: USB started */
 		flush_log();
 		usb_command_loop();
 	}
 
 	/* One-shot mode: run the kernel that came with the image, then reset. */
 	if (have_payload) {
+		mark(0x0000FF00u);                       /* green: entering the kernel */
 		run_kernel(0, 0);
 	}
 	reboot();
