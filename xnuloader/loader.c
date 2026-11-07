@@ -570,6 +570,8 @@ struct platform {
 	const char *name;
 	uint64_t io_base, io_size;       /* one window covering the SoC peripherals */
 	uint64_t gic_dist, gic_redist;   /* GICv3 */
+	uint64_t gic_redist_size;       /* ... the redistributor region */
+	uint64_t gic_redist_stride;     /* ... bytes from one core's redistributor frame to the next */
 	uint64_t uart;                   /* PL011, 0 if none */
 	int psci_hvc;                    /* the firmware's power interface is called with HVC, not SMC */
 	int log_other_cpu;               /* keep notes in the log partition while a kernel starts on another core */
@@ -581,7 +583,8 @@ struct platform {
 
 static const struct platform platform_qemu_virt = {
 	.name = "qemu-virt", .io_base = 0x08000000, .io_size = 0x08000000,
-	.gic_dist = 0x08000000, .gic_redist = 0x080A0000, .uart = 0x09000000, .psci_hvc = 1,
+	.gic_dist = 0x08000000, .gic_redist = 0x080A0000, .gic_redist_size = 0x100000, .gic_redist_stride = 0x20000,
+	.uart = 0x09000000, .psci_hvc = 1,
 	.cores = 8, .core_shift = 0,
 	/*
 	 * QEMU's emulated cores stop each other all the time (every flush of a page from all the
@@ -594,7 +597,8 @@ static const struct platform platform_qemu_virt = {
 static const struct platform platform_redwood = {
 	/* io_base must be non-zero: XNU treats a zero SoC base as "no SoC" and skips clock setup. */
 	.name = "redwood", .io_base = 0x00400000, .io_size = 0x3FC00000,
-	.gic_dist = 0x17A00000, .gic_redist = 0x17A60000, .uart = 0, .log_other_cpu = 1,
+	.gic_dist = 0x17A00000, .gic_redist = 0x17A60000, .gic_redist_size = 0x100000, .gic_redist_stride = 0x20000,
+	.uart = 0, .log_other_cpu = 1,
 	.cores = 8, .core_shift = 8,
 	/*
 	 * Cores 0-3 are Cortex-A55s (1.8 GHz at most), 4-7 Cortex-A78s (2.4 GHz): a big one is about
@@ -606,10 +610,12 @@ static const struct platform platform_redwood = {
 
 static const struct platform platform_pma120 = {
 	/* OPPO Find X9 Ultra, Snapdragon 8 Elite Gen 5 (SM8850, "canoe").
-	   GIC values from KaanapaliPkg (the vendor UEFI platform package): GICD 0x17000000,
-	   GICR 0x17080000. 8 cores: 0-5 Oryon M (small), 6-7 Oryon L (big), bootcpu=7. */
+	   GIC values from the phone's own device tree (pma120-vendor.dts): GICD 0x17000000 (0x10000),
+	   GICR 0x17080000 (0x200000, redistributor-stride 0x40000 - 8 frames), ITS at 0x17040000.
+	   8 cores: 0-5 Oryon M (small), 6-7 Oryon L (big), bootcpu=7. */
 	.name = "pma120", .io_base = 0x00400000, .io_size = 0x3FC00000,
-	.gic_dist = 0x17000000, .gic_redist = 0x17080000, .uart = 0, .log_other_cpu = 1,
+	.gic_dist = 0x17000000, .gic_redist = 0x17080000, .gic_redist_size = 0x200000, .gic_redist_stride = 0x40000,
+	.uart = 0, .log_other_cpu = 1,
 	.cores = 8, .core_shift = 8,
 	.small_cores = 0x3f,
 };
@@ -3458,8 +3464,10 @@ run_kernel(int have_checkpoint, uint64_t checkpoint)
 	dt_begin(&w, "gic");
 	dt_prop_str(&w, "device_type", "interrupt-controller");
 	dt_prop_str(&w, "compatible", "arm,gic-v3");
-	uint64_t gic_reg[4] = { plat->gic_dist - plat->io_base, 0x10000, plat->gic_redist - plat->io_base, 0x100000 };
+	uint64_t gic_reg[4] = { plat->gic_dist - plat->io_base, 0x10000, plat->gic_redist - plat->io_base, plat->gic_redist_size };
 	dt_prop(&w, "reg", gic_reg, sizeof(gic_reg));
+	uint64_t gic_stride[2] = { 0, plat->gic_redist_stride };
+	dt_prop(&w, "redistributor-stride", gic_stride, sizeof(gic_stride));
 	dt_end(&w);
 	if (plat->uart != 0) {
 		dt_begin(&w, "uart0");
