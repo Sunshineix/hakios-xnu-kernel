@@ -1,11 +1,17 @@
-# X9U-iOS绉绘椤圭洰 M1a锛歨akios 寮€婧愬唴鏍稿湪 QEMU 涓惎鍔ㄩ獙璇?# 鏃犱换浣?Apple 绉佹湁浜岃繘鍒讹細XNU 鍐呮牳锛圓pple 寮€婧愭爲 + hakios 琛ヤ竵锛? 鍗犱綅寮曞鍣?+ hello 鍐呭瓨鐩?#
-# 鐢ㄦ硶锛?#   1. 鍦ㄤ綘鐨?GitHub 璐﹀彿涓?fork 浠撳簱 oosexgang/hakios-xnu-kernel
-#   2. 鍦?fork 鐨勭綉椤典笂锛欰dd file 鈫?Create new file
-#      鏂囦欢鍚嶅～ .github/workflows/qemu-open.yml锛屾妸鏈枃浠跺唴瀹圭矘璐磋繘鍘伙紝Commit
-#   3. Actions 鏍囩椤?鈫?宸︿晶 "qemu-open (XNU boots in QEMU)" 鈫?Run workflow
-#   4. 棣栨鏋勫缓绾?30-60 鍒嗛挓锛堜笅杞?Apple xnu 婧愮爜鏍戝苟缂栬瘧鍐呮牳锛?#   5. 鎴愬姛鏍囧織锛堟瀯寤烘棩蹇?/ 涓婁紶鐨?qemu-open-log 宸ヤ欢閲岋級锛?#        == XNULOADER v3 ==
+# X9U-iOS移植项目 M1a：hakios 开源内核在 QEMU 中启动验证
+# 无任何 Apple 私有二进制：XNU 内核（Apple 开源树 + hakios 补丁）+ 占位引导器 + hello 内存盘
+#
+# 用法：
+#   1. 在你的 GitHub 账号上 fork 仓库 oosexgang/hakios-xnu-kernel
+#   2. 在 fork 的网页上：Add file → Create new file
+#      文件名填 .github/workflows/qemu-open.yml，把本文件内容粘贴进去，Commit
+#   3. Actions 标签页 → 左侧 "qemu-open (XNU boots in QEMU)" → Run workflow
+#   4. 首次构建约 30-60 分钟（下载 Apple xnu 源码树并编译内核）
+#   5. 成功标志（构建日志 / 上传的 qemu-open-log 工件里）：
+#        == XNULOADER v3 ==
 #        hakios-kernel: version ... / hakios-kernel: N drivers built in (...)
-#        hello 鐢ㄦ埛鎬佽緭鍑?name: qemu-open (XNU boots in QEMU)
+#        hello 用户态输出
+name: qemu-open (XNU boots in QEMU)
 
 on:
   workflow_dispatch:
@@ -29,7 +35,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential clang lld flex bison m4 autoconf automake libtool \
             perl python3 python3-pip git curl tar xz-utils unzip zip fakeroot uuid-dev \
-            qemu-system-aarch64 qemu-efi-aarch64
+            qemu-system-aarch64 qemu-efi-aarch64 ipxe-qemu
 
       - name: Install theos with its Linux toolchain and the iPhoneOS 16.5 SDK
         run: |
