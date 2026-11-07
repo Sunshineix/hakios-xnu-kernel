@@ -33,19 +33,22 @@ jobs:
 
       - name: Install theos with its Linux toolchain and the iPhoneOS 16.5 SDK
         run: |
-          git clone --depth 1 --recursive https://github.com/theos/theos.git "$HOME/theos"
-          mkdir -p "$HOME/theos/sdks"
-          git clone --depth 1 --filter=blob:none --sparse https://github.com/theos/sdks.git "$HOME/theos/sdks-git"
-          git -C "$HOME/theos/sdks-git" sparse-checkout set iPhoneOS16.5.sdk
-          ln -s ../sdks-git/iPhoneOS16.5.sdk "$HOME/theos/sdks/iPhoneOS16.5.sdk"
+          export THEOS="$HOME/theos"
+          bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
+          mkdir -p "$THEOS/sdks"
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/theos/sdks.git "$THEOS/sdks-git"
+          git -C "$THEOS/sdks-git" sparse-checkout set iPhoneOS16.5.sdk
+          ln -sfn ../sdks-git/iPhoneOS16.5.sdk "$THEOS/sdks/iPhoneOS16.5.sdk"
+          ls "$THEOS/toolchain/linux/iphone/bin" | head -5
 
       - name: Doctor (what this machine has and lacks)
         run: make doctor || true
 
       - name: Build and boot the open kernel in QEMU
         run: |
+          set -o pipefail
           mkdir -p logs
-          make qemu-open SECS=120 | tee logs/qemu-open.log
+          make qemu-open SECS=120 2>&1 | tee logs/qemu-open.log
 
       - name: Check the serial log for the boot markers
         run: |
