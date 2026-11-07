@@ -80,6 +80,7 @@
 
 static vm_offset_t gicd_base, gicr_base;
 static vm_size_t   gicr_size;
+static uint32_t    gicr_stride = GICR_FRAME_SIZE; /* from the device tree's redistributor-stride */
 static vm_offset_t gicr_cpu_base[MAX_CPUS]; /* each processor's redistributor frame */
 
 /*
@@ -399,7 +400,7 @@ gic_find_redistributor(void)
 	/* GICR_TYPER[63:32] packs Aff3.Aff2.Aff1.Aff0 */
 	uint32_t affinity = (uint32_t)(((mpidr >> 32) & 0xff) << 24 | (mpidr & 0xffffff));
 
-	for (vm_offset_t frame = gicr_base; frame + GICR_FRAME_SIZE <= gicr_base + gicr_size; frame += GICR_FRAME_SIZE) {
+	for (vm_offset_t frame = gicr_base; frame + GICR_FRAME_SIZE <= gicr_base + gicr_size; frame += gicr_stride) {
 		uint64_t typer = *(volatile uint64_t *)(frame + GICR_TYPER);
 
 		if ((uint32_t)(typer >> 32) == affinity) {
@@ -439,6 +440,15 @@ gic_v3_irq_cpu_init(void)
 		gicr_size = reg[3];
 		if (gicd_base == 0 || gicr_base == 0) {
 			panic("gic: cannot map the distributor/redistributor");
+		}
+		/* The distance between the redistributor frames, where the frames are not adjacent
+		 * (e.g. SM8850: 0x40000). Absent: GICR_FRAME_SIZE, the usual layout. */
+		if (SecureDTGetProperty(entry, "redistributor-stride", &prop, &prop_size) == kSuccess && prop_size >= 2 * sizeof(uint64_t)) {
+			uint32_t stride = (uint32_t)((const uint64_t *)prop)[1];
+
+			if (stride >= GICR_FRAME_SIZE) {
+				gicr_stride = stride;
+			}
 		}
 	} else if (gicr_cpu_base[cpu] != 0) {
 		return;
