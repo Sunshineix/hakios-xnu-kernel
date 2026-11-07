@@ -1,0 +1,28 @@
+#
+# Boot Shim Configs
+#
+[boot_shim]
+requires_kernel_header = true
+
+#
+# UEFI FD Configs
+# pma120 (SM8850): UEFI FD 0xC6900000 / 3 MiB（与 pma120Pkg MemoryMapLib 一致；
+# infiniti 同 SoC 模板同址。TODO: 与 Mu-Silicium 设备配置核对）
+#
+[uefi_fd]
+base = 0xC6900000
+size = 0x300000
+
+#
+# Android Boot Image Kernel Configs
+#
+[boot_image_kernel]
+kernel_compression = "gzip"
+append_dtb         = true
+
+#
+# Android Boot Image Configs
+# SM8850 boot image header v4（与 infiniti.toml 一致，已确认）
+#
+[boot_image]
+header_version = 4
