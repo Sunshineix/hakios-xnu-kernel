@@ -1,0 +1,7 @@
+# HakiOS defconfig for the OPPO Find X9 Ultra (pma120, SM8850, devices/pma120): the common kernel's configuration, the SM8850
+# layer's facts and this phone's own, put together the way Android puts a device's kernel configuration together.
+# The open profile (open.config): nothing of the phone's own firmware is loaded until each driver is ported and its firmware pulled.
+#include common_defconfig
+#include open.config
+#include sm8850.config
+#include pma120.config
