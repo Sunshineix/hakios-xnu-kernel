@@ -4745,9 +4745,29 @@ efi_main(efi_handle image, efi_system_table *st)
 	 * screen instead of resetting: the log of a failed start is the only evidence there is. */
 	if (have_payload) {
 		mark(0x0000FF00u);                       /* green: entering the kernel */
+		/* a colour of our own over the whole panel, so a kernel that draws leaves pixels that are not it */
+		{
+			volatile uint32_t *fb = (volatile uint32_t *)(uintptr_t)MARK_FB_BASE;
+
+			for (uint64_t i = 0; i < MARK_W * MARK_H; i++) {
+				fb[i] = 0x00102030u;
+			}
+			flush_dcache(MARK_FB_BASE, MARK_FB_BASE + MARK_W * MARK_H * 4);
+		}
 		int started = run_kernel(0, 0);
 		print("\n== one-shot finished (%d: 1 = the kernel ran and came back); holding the screen ==\n",
 		    (uint64_t)started);
+		{
+			volatile uint32_t *fb = (volatile uint32_t *)(uintptr_t)MARK_FB_BASE;
+
+			/*
+			 * Sampled low on the panel: the log text the loader dumps after the kernel stays at the
+			 * top, so anything down here that is not our 102030 was drawn by the kernel itself.
+			 */
+			print("after: px=%x %x %x %x\n", (uint64_t)fb[3000 * MARK_W + 720],
+			    (uint64_t)fb[2600 * MARK_W + 200], (uint64_t)fb[2000 * MARK_W + 1200],
+			    (uint64_t)fb[(MARK_H - 8) * MARK_W + 100]);
+		}
 		/* printed last, so it stays readable: what the kernel was told about the display */
 		print("video: base=%x w=%d h=%d stride=%d\n", SCREEN.base, (uint64_t)SCREEN.width,
 		    (uint64_t)SCREEN.height, (uint64_t)SCREEN.stride);
