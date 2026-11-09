@@ -494,8 +494,14 @@ write_logs(const char *klog, uint64_t klog_len)
 
 		fb_putc('\n');
 		for (uint64_t i = from; i < klog_len; i++) {
-			if (klog[i] != 0) {
-				fb_putc(klog[i]);
+			unsigned char c = (unsigned char)klog[i];
+
+			/*
+			 * The kernel's log ring carries binary headers between its lines; only text is drawn,
+			 * or the panel fills with glyphs that hide the panic at the end.
+			 */
+			if (c == '\n' || (c >= 32 && c < 127)) {
+				fb_putc((char)c);
 			}
 		}
 		fb_putc('\n');
