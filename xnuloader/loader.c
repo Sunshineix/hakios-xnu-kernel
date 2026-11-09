@@ -3688,6 +3688,46 @@ usb_dummy_notify(void *event, void *ctx)
 {
 }
 
+/*
+ * EFI_USBFN_IO_PROTOCOL: the controller driver's own view of the device. Only the entries needed to
+ * read back which identity it actually holds after StartEx are declared (the rest are skipped).
+ */
+typedef struct efi_usbfn_io {
+	uint32_t revision;
+	void *detect_port;
+	void *configure_enable_endpoints;
+	void *get_endpoint_max_packet_size;
+	void *get_device_info;
+	efi_status (EFIAPI *get_vendor_id_product_id)(struct efi_usbfn_io *self, uint16_t *vid, uint16_t *pid);
+} efi_usbfn_io;
+
+#define EFI_USBFN_IO_GUID { 0x32d2963a, 0xfe5d, 0x4f30, { 0xb6, 0x33, 0x6e, 0x5d, 0xc5, 0x58, 0x03, 0xcc } }
+
+/* What the USB calls returned and what the controller says its identity is. Printed over the purple
+ * mark (not before it: the mark wipes the screen) so a filmed run shows it. */
+static uint64_t usb_stop_status;
+static int      usb_stop_called;
+static uint64_t usb_start_status;
+static int      usb_usbfn_found;
+static uint64_t usb_vidpid_status;
+static uint16_t usb_vid, usb_pid;
+
+static void
+usb_print_identity(void)
+{
+	if (usb_stop_called) {
+		print("usb: stop=%x", usb_stop_status);
+	} else {
+		print("usb: stop=none");
+	}
+	print(" start=%x\n", usb_start_status);
+	if (usb_usbfn_found) {
+		print("usb: usbfn vid=%x pid=%x rt=%x\n", (uint64_t)usb_vid, (uint64_t)usb_pid, usb_vidpid_status);
+	} else {
+		print("usb: usbfn protocol not found\n");
+	}
+}
+
 static int
 usb_start(void)
 {
@@ -3716,24 +3756,31 @@ usb_start(void)
 	set.bos = usb_bos;
 	set.string_count = 5;
 	set.strings = strings;
-	/* pma120: the firmware's gadget is already up (its own descriptors, already enumerated by
-	 * the host). A bare start_ex swaps the descriptor set on the running device but does not make
-	 * the host re-read them - it keeps the vendor identity (QUSB_BULK). Stop first: a clean
-	 * disconnect, then start_ex with ours, and the host enumerates this loader. */
+	/* pma120: try a clean stop first so the host sees a disconnect before it re-reads descriptors.
+	 * The result is recorded, not acted on: a failing stop leaves the controller running. */
 	if (USB->stop != NULL) {
-		USB->stop();
+		usb_stop_called = 1;
+		usb_stop_status = USB->stop();
+	}
+	BS->stall(1000000);
+	usb_start_status = USB->start_ex(&set);
+	if (EFI_ERROR(usb_start_status)) {
+		print("usb: start failed %x\n", usb_start_status);
+		return 0;
 	}
 	/*
-	 * pma120: the host has to *see* the disconnect before it reads descriptors again. StopController
-	 * only resets the DWC3 run/stop bit; back-to-back with StartController the gap is far too short
-	 * for the host to notice, so Windows keeps the identity it enumerated before (QUSB_BULK 05c6:900e)
-	 * and never re-reads ours. Stay off the bus for a second first: the loader is not in a hurry.
+	 * Read back the identity the controller holds now. Ours (18d1:d00d) means StartEx took and any
+	 * disagreement with the host is about enumeration; the firmware's (05c6:900e) means the controller
+	 * never took our descriptor set and the failure is below StartEx.
 	 */
-	BS->stall(1000000);
-	efi_status s = USB->start_ex(&set);
-	if (EFI_ERROR(s)) {
-		print("usb: start failed %x\n", s);
-		return 0;
+	{
+		static const efi_guid usbfn_guid = EFI_USBFN_IO_GUID;
+		efi_usbfn_io *fn = NULL;
+
+		if (!EFI_ERROR(BS->locate_protocol(&usbfn_guid, NULL, (void **)&fn)) && fn->get_vendor_id_product_id != NULL) {
+			usb_usbfn_found = 1;
+			usb_vidpid_status = fn->get_vendor_id_product_id(fn, &usb_vid, &usb_pid);
+		}
 	}
 	if (EFI_ERROR(USB->allocate_transfer_buffer(USB_CHUNK, (void **)&usb_rx_buf)) ||
 	    EFI_ERROR(USB->allocate_transfer_buffer(USB_CHUNK, (void **)&usb_tx_buf))) {
@@ -4421,6 +4468,7 @@ efi_main(efi_handle image, efi_system_table *st)
 	if (have_payload && pi.usb_mode) {
 		if (usb_start()) {
 			mark(0x00FF00FFu);               /* purple: USB started */
+			usb_print_identity();            /* after the mark: the mark would wipe it */
 			flush_log();
 			usb_command_loop();
 		}
