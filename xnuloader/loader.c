@@ -4751,6 +4751,21 @@ efi_main(efi_handle image, efi_system_table *st)
 	 * screen instead of resetting: the log of a failed start is the only evidence there is. */
 	if (have_payload) {
 		mark(0x0000FF00u);                       /* green: entering the kernel */
+		/*
+		 * Is there a UFS host where SM8850 has one (ufshc@1d84000, the address the phone's own tree
+		 * gives), and is its SMMU (apps-smmu@15000000, stream 0x60) there too? Read before the kernel
+		 * runs: no driver needed, and a video of the screen is the evidence.
+		 */
+		{
+			volatile uint32_t *smmu = (volatile uint32_t *)(uintptr_t)0x15000000ULL;
+			volatile uint32_t *ufs = (volatile uint32_t *)(uintptr_t)0x01D84000ULL;
+
+			print("smmu: idr0=%x idr1=%x sCR0=%x\n", (uint64_t)smmu[0x20 / 4],
+			    (uint64_t)smmu[0x24 / 4], (uint64_t)smmu[0x00 / 4]);
+			print("ufs: cap=%x ver=%x hcs=%x\n", (uint64_t)ufs[0x00 / 4],
+			    (uint64_t)ufs[0x08 / 4], (uint64_t)ufs[0x10 / 4]);
+			flush_dcache((uint64_t)(uintptr_t)ufs, (uint64_t)(uintptr_t)ufs + 0x1000);
+		}
 		/* a colour of our own over the whole panel, so a kernel that draws leaves pixels that are not it */
 		{
 			volatile uint32_t *fb = (volatile uint32_t *)(uintptr_t)MARK_FB_BASE;
