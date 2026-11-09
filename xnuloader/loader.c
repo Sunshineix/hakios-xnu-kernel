@@ -3716,6 +3716,13 @@ usb_start(void)
 	set.bos = usb_bos;
 	set.string_count = 5;
 	set.strings = strings;
+	/* pma120: the firmware's gadget is already up (its own descriptors, already enumerated by
+	 * the host). A bare start_ex swaps the descriptor set on the running device but does not make
+	 * the host re-read them - it keeps the vendor identity (QUSB_BULK). Stop first: a clean
+	 * disconnect, then start_ex with ours, and the host enumerates this loader. */
+	if (USB->stop != NULL) {
+		USB->stop();
+	}
 	efi_status s = USB->start_ex(&set);
 	if (EFI_ERROR(s)) {
 		print("usb: start failed %x\n", s);
