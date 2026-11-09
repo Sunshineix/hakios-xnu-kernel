@@ -164,6 +164,86 @@ str_eq(const char *a, const char *b)
 }
 
 /*
+ * The panel's scanout. The firmware draws its own debug text here, and so does the loader: the UEFI
+ * console (ConOut) is NOT rendered on this phone's panel, so print() alone is invisible there.
+ * Everything print() emits is mirrored into the framebuffer with an 8x8 font, which is what makes a
+ * failure readable off a video of the screen.
+ */
+#include "font8x8.h"
+
+#define MARK_FB_BASE 0xFC800000ULL
+#define MARK_W       1440ULL
+#define MARK_H       3168ULL
+#define FB_SCALE     2
+
+static uint64_t fb_tx, fb_ty;
+static int fb_text_on;
+
+static void flush_dcache(uint64_t start, uint64_t end);
+
+static void
+fb_clear(void)
+{
+	volatile uint32_t *fb = (volatile uint32_t *)MARK_FB_BASE;
+
+	for (uint64_t i = 0; i < MARK_W * MARK_H; i++) {
+		fb[i] = 0;
+	}
+	fb_tx = 0;
+	fb_ty = 0;
+}
+
+static void
+fb_putc(char c)
+{
+	volatile uint32_t *fb = (volatile uint32_t *)MARK_FB_BASE;
+	const uint64_t cw = 8 * FB_SCALE, ch = 8 * FB_SCALE;
+
+	if (!fb_text_on) {
+		return;
+	}
+	if (c == '\n') {
+		fb_tx = 0;
+		fb_ty += ch;
+		return;
+	}
+	if (c == '\r') {
+		fb_tx = 0;
+		return;
+	}
+	if (c < 32 || c > 126) {
+		c = '?';
+	}
+	if (fb_tx + cw > MARK_W) {
+		fb_tx = 0;
+		fb_ty += ch;
+	}
+	if (fb_ty + ch > MARK_H) {
+		fb_clear();                     /* only the last screenful matters */
+	}
+	const unsigned char *g = font8x8_basic[(unsigned char)c];
+
+	for (uint64_t y = 0; y < 8; y++) {
+		for (uint64_t x = 0; x < 8; x++) {
+			uint32_t color = ((g[y] >> x) & 1) ? 0x00FFFFFFu : 0x00000000u;
+			volatile uint32_t *row = fb + (fb_ty + y * FB_SCALE) * MARK_W + fb_tx + x * FB_SCALE;
+
+			for (uint64_t dy = 0; dy < FB_SCALE; dy++) {
+				row[dy * MARK_W + 0] = color;
+				row[dy * MARK_W + 1] = color;
+			}
+		}
+	}
+	{
+		uint64_t first = (uint64_t)(uintptr_t)&fb[fb_ty * MARK_W + fb_tx];
+		uint64_t last = (uint64_t)(uintptr_t)&fb[(fb_ty + ch - 1) * MARK_W + fb_tx + cw - 1];
+
+		flush_dcache(first, last + 4);   /* the panel scans out of RAM: push the cell out */
+	}
+	fb_tx += cw;
+}
+
+/*
  * Set once the loader takes commands over USB: its log travels that way, and
  * the screen is left to the kernel (and to "oem screenshot").
  */
@@ -184,6 +264,7 @@ put_char(char c)
 	if (log_len < sizeof(log_buf) - 1) {
 		log_buf[log_len++] = c;
 	}
+	fb_putc(c);
 	if (ST->con_out != NULL && !screen_quiet) {
 		if (c == '\n') {
 			w[0] = '\r', w[1] = '\n';
@@ -261,9 +342,6 @@ clean_dcache(uint64_t start, uint64_t end)
 /* Diagnostic color markers on the splash framebuffer (the panel's scanout):
  * the final color on the phone's screen shows how far the loader got.
  *   WHITE: payload parsed   PURPLE: USB started   GREEN: entering kernel   RED: rebooting */
-#define MARK_FB_BASE 0xFC800000ULL
-#define MARK_W       1440ULL
-#define MARK_H       3168ULL
 static void
 mark(uint32_t color)
 {
@@ -272,6 +350,8 @@ mark(uint32_t color)
 		fb[i] = color;
 	}
 	flush_dcache(MARK_FB_BASE, MARK_FB_BASE + MARK_W * MARK_H * 4);
+	fb_tx = 0;                       /* the fill wiped the text: start again at the top */
+	fb_ty = 0;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -365,6 +445,22 @@ write_logs(const char *klog, uint64_t klog_len)
 {
 	efi_block_io *bio = find_log_partition();
 
+	/*
+	 * On the phone there is no host to fetch the log from (the USB channel is what is broken),
+	 * so the tail of the kernel's own log is drawn on the panel: the panic is at its end, and a
+	 * video of the screen is the only way to read it.
+	 */
+	if (klog != NULL && klog_len != 0) {
+		uint64_t from = klog_len > 32768 ? klog_len - 32768 : 0;
+
+		fb_putc('\n');
+		for (uint64_t i = from; i < klog_len; i++) {
+			if (klog[i] != 0) {
+				fb_putc(klog[i]);
+			}
+		}
+		fb_putc('\n');
+	}
 	compose_logs(klog, klog_len);
 	if (bio == NULL) {
 		/* No log partition (QEMU): echo the returned kernel log on the console instead. */
@@ -4460,6 +4556,7 @@ efi_main(efi_handle image, efi_system_table *st)
 
 	install_exception_hook();
 	wdt_arm();
+	fb_text_on = 1;                          /* from here on print() is visible on the panel */
 
 	int have_payload = parse_payload(&pi, 0);
 	if (have_payload) {
@@ -4484,10 +4581,18 @@ efi_main(efi_handle image, efi_system_table *st)
 		}
 	}
 
-	/* One-shot mode: run the kernel that came with the image, then reset. */
+	/* One-shot mode: run the kernel that came with the image, then hold what happened on the
+	 * screen instead of resetting: the log of a failed start is the only evidence there is. */
 	if (have_payload) {
 		mark(0x0000FF00u);                       /* green: entering the kernel */
-		run_kernel(0, 0);
+		int started = run_kernel(0, 0);
+		print("\n== one-shot finished (%d: 1 = the kernel ran and came back); holding the screen ==\n",
+		    (uint64_t)started);
+		for (;;) {
+			wdt_pet();
+			for (volatile int spin = 0; spin < 1000000; spin++) {
+			}
+		}
 	}
 	reboot();
 	return 0;
