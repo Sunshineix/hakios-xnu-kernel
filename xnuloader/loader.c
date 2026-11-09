@@ -3261,6 +3261,17 @@ run_kernel(int have_checkpoint, uint64_t checkpoint)
 	ba->memSizeActual = win_size;
 	ba->topOfKernelData = top;
 	/* any display the firmware has set up: the phone's panel, or QEMU's ramfb */
+	if (SCREEN.base == 0) {
+		/*
+		 * pma120: the firmware's splash buffer is the panel's live scanout (everything the loader
+		 * draws into it appears), so hand it to the kernel even when the firmware's GOP cannot be
+		 * read. The kernel's software framebuffer draws straight into it.
+		 */
+		SCREEN.base = 0xFC800000ULL;
+		SCREEN.width = 1440;
+		SCREEN.height = 3168;
+		SCREEN.stride = 1440 * 4;
+	}
 	if (SCREEN.base != 0) {
 		/*
 		 * v_display is how iBoot says "graphics mode": the kernel then keeps
@@ -4734,12 +4745,12 @@ efi_main(efi_handle image, efi_system_table *st)
 	 * screen instead of resetting: the log of a failed start is the only evidence there is. */
 	if (have_payload) {
 		mark(0x0000FF00u);                       /* green: entering the kernel */
-		/* what the kernel will be told about the display: a zero base means it gets none */
-		print("video: base=%x w=%d h=%d stride=%d\n", SCREEN.base, (uint64_t)SCREEN.width,
-		    (uint64_t)SCREEN.height, (uint64_t)SCREEN.stride);
 		int started = run_kernel(0, 0);
 		print("\n== one-shot finished (%d: 1 = the kernel ran and came back); holding the screen ==\n",
 		    (uint64_t)started);
+		/* printed last, so it stays readable: what the kernel was told about the display */
+		print("video: base=%x w=%d h=%d stride=%d\n", SCREEN.base, (uint64_t)SCREEN.width,
+		    (uint64_t)SCREEN.height, (uint64_t)SCREEN.stride);
 		for (;;) {
 			wdt_pet();
 			for (volatile int spin = 0; spin < 1000000; spin++) {
