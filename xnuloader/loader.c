@@ -3833,7 +3833,7 @@ typedef struct efi_usbfn_io {
 	void *detect_port;
 	void *configure_enable_endpoints;
 	void *get_endpoint_max_packet_size;
-	void *get_device_info;
+	efi_status (EFIAPI *get_device_info)(struct efi_usbfn_io *self, uint32_t id, uint64_t *size, void *buf);
 	efi_status (EFIAPI *get_vendor_id_product_id)(struct efi_usbfn_io *self, uint16_t *vid, uint16_t *pid);
 } efi_usbfn_io;
 
@@ -4012,10 +4012,45 @@ usb_start(void)
  */
 static uint64_t usb_data_timeout;
 
+/*
+ * Once a second, write down what the controller driver says it is serving: the product string it
+ * would answer GET_DESCRIPTOR with, and the VID/PID it holds. A filmed run then shows whether the
+ * firmware's own configuration replaces ours at some point after start_ex.
+ */
+static void
+usb_heartbeat(void)
+{
+	static const efi_guid g = EFI_USBFN_IO_GUID;
+	efi_usbfn_io *fn = NULL;
+
+	if (EFI_ERROR(BS->locate_protocol(&g, NULL, (void **)&fn))) {
+		print("hb: no usbfn\n");
+		return;
+	}
+	if (fn->get_device_info != NULL) {
+		char16 buf[64];
+		uint64_t size = sizeof(buf);
+		efi_status st = fn->get_device_info(fn, 3 /* EfiUsbDeviceInfoProductName */, &size, buf);
+
+		print("hb: prod st=%x '", st);
+		for (uint64_t i = 0; i + 1 < size / 2 && i < 48; i++) {
+			char16 c = buf[i];
+
+			fb_putc(c >= 32 && c < 127 ? (char)c : '.');
+		}
+		print("'\n");
+	}
+	if (fn->get_vendor_id_product_id != NULL) {
+		uint16_t v = 0, p = 0;
+		efi_status st = fn->get_vendor_id_product_id(fn, &v, &p);
+
+		print("hb: vid=%x pid=%x st=%x\n", (uint64_t)v, (uint64_t)p, st);
+	}
+}
+
 static int64_t
 usb_wait(uint8_t endpoint)
-{
-	/* static: a long transfer is many short waits, and the watchdog must be fed across them */
+{	/* static: a long transfer is many short waits, and the watchdog must be fed across them */
 	static uint64_t last_pet;
 	uint64_t freq = READ_SYSREG(CNTFRQ_EL0), began = READ_SYSREG(CNTVCT_EL0);
 
@@ -4043,6 +4078,7 @@ usb_wait(uint8_t endpoint)
 		if (READ_SYSREG(CNTVCT_EL0) - last_pet > freq) {
 			last_pet = READ_SYSREG(CNTVCT_EL0);
 			wdt_pet();
+			usb_heartbeat();
 		}
 	}
 }
