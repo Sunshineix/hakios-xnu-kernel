@@ -3683,19 +3683,27 @@ static const uint8_t usb_str_prod[20] = { 20, 3, 'x', 0, 'n', 0, 'u', 0, 'l', 0,
 static const uint8_t usb_str_serial[20] = { 20, 3, 'x', 0, 'n', 0, 'u', 0, 'l', 0, 'o', 0, 'a', 0, 'd', 0, 'e', 0, 'r', 0 };
 static const uint8_t usb_str_iface[18] = { 18, 3, 'f', 0, 'a', 0, 's', 0, 't', 0, 'b', 0, 'o', 0, 'o', 0, 't', 0 };
 
+static void EFIAPI
+usb_dummy_notify(void *event, void *ctx)
+{
+}
+
 static int
 usb_start(void)
 {
 	static const efi_guid usb_guid = QCOM_USB_DEVICE_GUID;
+	static const efi_guid init_guid = QCOM_USB_INIT_EVENT_GUID;
 	static const void *cfg = usb_cfg_desc, *ss_cfg = usb_ss_cfg_desc;
 	static const void *strings[5] = { usb_str0, usb_str_mfr, usb_str_prod, usb_str_serial, usb_str_iface };
 	static usb_device_descriptor_set set;
+	void *event;
 
-	/* pma120: do NOT signal QCOM_USB_INIT_EVENT_GUID here. The firmware's UsbConfigDxe
-	 * listens for it and (re)configures the gadget with the vendor descriptors - which
-	 * overwrites this loader's own descriptors when its handler runs after start_ex.
-	 * The controller is already up (the firmware dispatched the USB stack first), so
-	 * start_ex alone is enough. */
+	/* Ask the platform to bring the controller up in peripheral mode (as the stock fastboot does). */
+	if (!EFI_ERROR(BS->create_event_ex(0x200 /* EVT_NOTIFY_SIGNAL */, 8 /* TPL_CALLBACK */, usb_dummy_notify, NULL,
+	    &init_guid, &event))) {
+		BS->signal_event(event);
+		BS->close_event(event);
+	}
 	if (EFI_ERROR(BS->locate_protocol(&usb_guid, NULL, (void **)&USB))) {
 		print("usb: device protocol not found\n");
 		return 0;
@@ -4396,10 +4404,22 @@ efi_main(efi_handle image, efi_system_table *st)
 	if (have_payload) {
 		mark(0x00FFFFFFu);                       /* white: payload parsed */
 	}
-	if (have_payload && pi.usb_mode && usb_start()) {
-		mark(0x00FF00FFu);                       /* purple: USB started */
+	if (have_payload && pi.usb_mode) {
+		if (usb_start()) {
+			mark(0x00FF00FFu);               /* purple: USB started */
+			flush_log();
+			usb_command_loop();
+		}
+		/* usb_start failed in usb mode: say so (orange) and stay alive instead of
+		 * falling through to the one-shot path and resetting the phone - the state
+		 * stays inspectable and the host can be watched. */
+		mark(0x00FF7F00u);
 		flush_log();
-		usb_command_loop();
+		for (;;) {
+			wdt_pet();
+			for (volatile int spin = 0; spin < 1000000; spin++) {
+			}
+		}
 	}
 
 	/* One-shot mode: run the kernel that came with the image, then reset. */
