@@ -176,6 +176,8 @@ str_eq(const char *a, const char *b)
 #define MARK_W       1440ULL
 #define MARK_H       3168ULL
 #define FB_SCALE     2
+#define FB_X0        60ULL
+#define FB_Y0        180ULL              /* below the bezel: the first lines used to be clipped */
 
 static uint64_t fb_tx, fb_ty;
 static int fb_text_on;
@@ -226,8 +228,8 @@ fb_clear(void)
 	for (uint64_t i = 0; i < MARK_W * MARK_H; i++) {
 		fb[i] = 0;
 	}
-	fb_tx = 0;
-	fb_ty = 0;
+	fb_tx = FB_X0;
+	fb_ty = FB_Y0;
 	fb_dirty = 0;
 	flush_dcache(MARK_FB_BASE, MARK_FB_BASE + MARK_W * MARK_H * 4);
 }
@@ -242,20 +244,20 @@ fb_putc(char c)
 		return;
 	}
 	if (c == '\n') {
-		fb_tx = 0;
+		fb_tx = FB_X0;
 		fb_ty += ch;
 		fb_flush();                     /* done with that line: push it out */
 		return;
 	}
 	if (c == '\r') {
-		fb_tx = 0;
+		fb_tx = FB_X0;
 		return;
 	}
 	if (c < 32 || c > 126) {
 		c = '?';
 	}
 	if (fb_tx + cw > MARK_W) {
-		fb_tx = 0;
+		fb_tx = FB_X0;
 		fb_ty += ch;
 		fb_flush();
 	}
@@ -387,8 +389,8 @@ mark(uint32_t color)
 		fb[i] = color;
 	}
 	flush_dcache(MARK_FB_BASE, MARK_FB_BASE + MARK_W * MARK_H * 4);
-	fb_tx = 0;                       /* the fill wiped the text: start again at the top */
-	fb_ty = 0;
+	fb_tx = FB_X0;                   /* the fill wiped the text: start again in the visible area */
+	fb_ty = FB_Y0;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -3882,6 +3884,7 @@ dwc3_force_reenumerate(void)
 static uint64_t usb_stop_status;
 static int      usb_stop_called;
 static uint64_t usb_start_status;
+static uint64_t usb_restart_status;
 static int      usb_usbfn_found;
 static uint64_t usb_vidpid_status;
 static uint16_t usb_vid, usb_pid;
@@ -3894,7 +3897,7 @@ usb_print_identity(void)
 	} else {
 		print("usb: stop=none");
 	}
-	print(" start=%x\n", usb_start_status);
+	print(" start=%x restart=%x\n", usb_start_status, usb_restart_status);
 	if (dwc3_toggled) {
 		print("usb: dwc3 id=%x dctl %x -> %x\n", dwc3_id, dwc3_dctl_before, dwc3_dctl_after);
 	} else {
@@ -3935,19 +3938,32 @@ usb_start(void)
 	set.bos = usb_bos;
 	set.string_count = 5;
 	set.strings = strings;
-	/* pma120: try a clean stop first so the host sees a disconnect before it re-reads descriptors.
-	 * The result is recorded, not acted on: a failing stop leaves the controller running. */
-	if (USB->stop != NULL) {
-		usb_stop_called = 1;
-		usb_stop_status = USB->stop();
-	}
-	BS->stall(1000000);
+	/*
+	 * First configure the device with our descriptors. This is also what locates the controller
+	 * driver's protocol: UsbDevice->Stop returns EFI_DEVICE_ERROR (8000000000000007) while that
+	 * pointer is still NULL, which is why the stop before this call never disconnected anything.
+	 */
 	usb_start_status = USB->start_ex(&set);
 	if (EFI_ERROR(usb_start_status)) {
 		print("usb: start failed %x\n", usb_start_status);
 		return 0;
 	}
-	/* The descriptors are the driver's now; make the host look at them again. */
+	/*
+	 * Now stop for real: the controller leaves the bus, and stays off long enough that the host
+	 * cannot miss it. When it comes back the host re-enumerates and reads the descriptors the
+	 * driver holds now - ours.
+	 */
+	if (USB->stop != NULL) {
+		usb_stop_called = 1;
+		usb_stop_status = USB->stop();
+	}
+	BS->stall(800000);
+	usb_restart_status = USB->start_ex(&set);
+	if (EFI_ERROR(usb_restart_status)) {
+		print("usb: restart failed %x\n", usb_restart_status);
+		return 0;
+	}
+	/* And the register-level fallback, in case even that gap is missed. */
 	dwc3_force_reenumerate();
 	/*
 	 * Read back the identity the controller holds now. Ours (18d1:d00d) means StartEx took and any
