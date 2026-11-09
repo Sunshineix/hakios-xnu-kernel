@@ -167,7 +167,8 @@ str_eq(const char *a, const char *b)
  * The panel's scanout. The firmware draws its own debug text here, and so does the loader: the UEFI
  * console (ConOut) is NOT rendered on this phone's panel, so print() alone is invisible there.
  * Everything print() emits is mirrored into the framebuffer with an 8x8 font, which is what makes a
- * failure readable off a video of the screen.
+ * failure readable off a video of the screen. The panel scans memory out, so the cells drawn are
+ * written back before the next line is started (per character would be far too slow).
  */
 #include "font8x8.h"
 
@@ -178,8 +179,44 @@ str_eq(const char *a, const char *b)
 
 static uint64_t fb_tx, fb_ty;
 static int fb_text_on;
+static uint64_t fb_dx0, fb_dy0, fb_dx1, fb_dy1;   /* dirty rectangle, in pixels */
+static int fb_dirty;
 
 static void flush_dcache(uint64_t start, uint64_t end);
+
+static void
+fb_flush(void)
+{
+	volatile uint32_t *fb = (volatile uint32_t *)MARK_FB_BASE;
+
+	if (!fb_dirty) {
+		return;
+	}
+	for (uint64_t y = fb_dy0; y < fb_dy1; y++) {
+		uint64_t a = (uint64_t)(uintptr_t)&fb[y * MARK_W + fb_dx0];
+		uint64_t b = (uint64_t)(uintptr_t)&fb[y * MARK_W + fb_dx1];
+
+		flush_dcache(a, b);
+	}
+	fb_dirty = 0;
+}
+
+static void
+fb_mark_dirty(uint64_t x0, uint64_t y0, uint64_t x1, uint64_t y1)
+{
+	if (!fb_dirty) {
+		fb_dx0 = x0;
+		fb_dy0 = y0;
+		fb_dx1 = x1;
+		fb_dy1 = y1;
+		fb_dirty = 1;
+		return;
+	}
+	if (x0 < fb_dx0) fb_dx0 = x0;
+	if (y0 < fb_dy0) fb_dy0 = y0;
+	if (x1 > fb_dx1) fb_dx1 = x1;
+	if (y1 > fb_dy1) fb_dy1 = y1;
+}
 
 static void
 fb_clear(void)
@@ -191,6 +228,8 @@ fb_clear(void)
 	}
 	fb_tx = 0;
 	fb_ty = 0;
+	fb_dirty = 0;
+	flush_dcache(MARK_FB_BASE, MARK_FB_BASE + MARK_W * MARK_H * 4);
 }
 
 static void
@@ -205,6 +244,7 @@ fb_putc(char c)
 	if (c == '\n') {
 		fb_tx = 0;
 		fb_ty += ch;
+		fb_flush();                     /* done with that line: push it out */
 		return;
 	}
 	if (c == '\r') {
@@ -217,6 +257,7 @@ fb_putc(char c)
 	if (fb_tx + cw > MARK_W) {
 		fb_tx = 0;
 		fb_ty += ch;
+		fb_flush();
 	}
 	if (fb_ty + ch > MARK_H) {
 		fb_clear();                     /* only the last screenful matters */
@@ -234,12 +275,7 @@ fb_putc(char c)
 			}
 		}
 	}
-	{
-		uint64_t first = (uint64_t)(uintptr_t)&fb[fb_ty * MARK_W + fb_tx];
-		uint64_t last = (uint64_t)(uintptr_t)&fb[(fb_ty + ch - 1) * MARK_W + fb_tx + cw - 1];
-
-		flush_dcache(first, last + 4);   /* the panel scans out of RAM: push the cell out */
-	}
+	fb_mark_dirty(fb_tx, fb_ty, fb_tx + cw, fb_ty + ch);
 	fb_tx += cw;
 }
 
@@ -308,6 +344,7 @@ print(const char *fmt, ...)
 			put_char(*fmt);
 		}
 	}
+	fb_flush();                             /* the last line may not end with '\n' */
 	__builtin_va_end(ap);
 }
 
@@ -460,6 +497,7 @@ write_logs(const char *klog, uint64_t klog_len)
 			}
 		}
 		fb_putc('\n');
+		fb_flush();
 	}
 	compose_logs(klog, klog_len);
 	if (bio == NULL) {
