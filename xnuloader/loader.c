@@ -3723,6 +3723,13 @@ usb_start(void)
 	if (USB->stop != NULL) {
 		USB->stop();
 	}
+	/*
+	 * pma120: the host has to *see* the disconnect before it reads descriptors again. StopController
+	 * only resets the DWC3 run/stop bit; back-to-back with StartController the gap is far too short
+	 * for the host to notice, so Windows keeps the identity it enumerated before (QUSB_BULK 05c6:900e)
+	 * and never re-reads ours. Stay off the bus for a second first: the loader is not in a hurry.
+	 */
+	BS->stall(1000000);
 	efi_status s = USB->start_ex(&set);
 	if (EFI_ERROR(s)) {
 		print("usb: start failed %x\n", s);
