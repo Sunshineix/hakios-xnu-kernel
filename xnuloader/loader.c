@@ -4734,6 +4734,9 @@ efi_main(efi_handle image, efi_system_table *st)
 	 * screen instead of resetting: the log of a failed start is the only evidence there is. */
 	if (have_payload) {
 		mark(0x0000FF00u);                       /* green: entering the kernel */
+		/* what the kernel will be told about the display: a zero base means it gets none */
+		print("video: base=%x w=%d h=%d stride=%d\n", SCREEN.base, (uint64_t)SCREEN.width,
+		    (uint64_t)SCREEN.height, (uint64_t)SCREEN.stride);
 		int started = run_kernel(0, 0);
 		print("\n== one-shot finished (%d: 1 = the kernel ran and came back); holding the screen ==\n",
 		    (uint64_t)started);
