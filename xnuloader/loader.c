@@ -3837,6 +3837,46 @@ typedef struct efi_usbfn_io {
 
 #define EFI_USBFN_IO_GUID { 0x32d2963a, 0xfe5d, 0x4f30, { 0xb6, 0x33, 0x6e, 0x5d, 0xc5, 0x58, 0x03, 0xcc } }
 
+/*
+ * SM8850 (canoe): the DWC3 device controller, at the address the phone's own tree gives
+ * (/soc/ssusb@a600000, compatible "snps,dwc3", reg 0xa600000/0xd93c).
+ *
+ * The vendor stop path fails on this phone (its USB core init logs I2C/QUP errors and
+ * StopController returns EFI_DEVICE_ERROR), so no disconnect ever happens and the host keeps the
+ * identity it enumerated before - our descriptors are never re-read. DCTL.RunStop is the hardware
+ * way to do it: clear it and the device drops off the bus, set it and it connects again, at which
+ * point the host reads the descriptors the driver holds (ours, after start_ex).
+ */
+#define DWC3_BASE    0x0A600000ULL
+#define DWC3_GSNPSID 0xC120
+#define DWC3_DCTL    0xC704
+
+static uint64_t dwc3_id, dwc3_dctl_before, dwc3_dctl_after;
+static int      dwc3_toggled;
+
+static void
+dwc3_force_reenumerate(void)
+{
+	volatile uint32_t *id = (volatile uint32_t *)(uintptr_t)(DWC3_BASE + DWC3_GSNPSID);
+	volatile uint32_t *dctl = (volatile uint32_t *)(uintptr_t)(DWC3_BASE + DWC3_DCTL);
+	uint32_t v;
+
+	dwc3_id = *id;
+	if ((dwc3_id >> 16) != 0x5533) {
+		return;                     /* not a DWC3 at that address: leave it alone */
+	}
+	v = *dctl;
+	dwc3_dctl_before = v;
+	*dctl = v & ~1u;                /* RunStop=0: off the bus */
+	__asm__ volatile("dsb sy");
+	BS->stall(500000);              /* long enough for the host to see the disconnect */
+	*dctl = v | 1u;                 /* RunStop=1: back, and the host re-reads the descriptors */
+	__asm__ volatile("dsb sy");
+	BS->stall(200000);
+	dwc3_dctl_after = *dctl;
+	dwc3_toggled = 1;
+}
+
 /* What the USB calls returned and what the controller says its identity is. Printed over the purple
  * mark (not before it: the mark wipes the screen) so a filmed run shows it. */
 static uint64_t usb_stop_status;
@@ -3855,6 +3895,11 @@ usb_print_identity(void)
 		print("usb: stop=none");
 	}
 	print(" start=%x\n", usb_start_status);
+	if (dwc3_toggled) {
+		print("usb: dwc3 id=%x dctl %x -> %x\n", dwc3_id, dwc3_dctl_before, dwc3_dctl_after);
+	} else {
+		print("usb: dwc3 id=%x (not toggled)\n", dwc3_id);
+	}
 	if (usb_usbfn_found) {
 		print("usb: usbfn vid=%x pid=%x rt=%x\n", (uint64_t)usb_vid, (uint64_t)usb_pid, usb_vidpid_status);
 	} else {
@@ -3902,6 +3947,8 @@ usb_start(void)
 		print("usb: start failed %x\n", usb_start_status);
 		return 0;
 	}
+	/* The descriptors are the driver's now; make the host look at them again. */
+	dwc3_force_reenumerate();
 	/*
 	 * Read back the identity the controller holds now. Ours (18d1:d00d) means StartEx took and any
 	 * disagreement with the host is about enumeration; the firmware's (05c6:900e) means the controller
